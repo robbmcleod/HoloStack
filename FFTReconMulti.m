@@ -63,11 +63,12 @@ end
 %   1.) a 2-D array of doubles
 %   2.) a HoloClass object, empty except for a filename
 if( isobject( hs ) )
-    % hc = hs.copy();
     hc = hs;
-    dm3struct = DM3Import( hc.filename );
-    hc.holo = dm3struct.image_data;
-    
+    % Does it already have data or do we need to load it?
+    if( isempty( hc.holo ) )
+        dm3struct = DM3Import( hc.filename );
+        hc.holo = dm3struct.image_data;
+    end
     % TO DO: import other parameters from dm3struct
     clear dm3struct;
 elseif( isnumeric( hs ) )

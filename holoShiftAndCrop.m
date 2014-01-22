@@ -1,4 +1,4 @@
-function out = holoShiftAndCrop(in, relOffset,newSize)
+function out = holoShiftAndCrop(in, relOffset, newSize)
 
     inFT = fft2(in);
     
@@ -8,7 +8,7 @@ function out = holoShiftAndCrop(in, relOffset,newSize)
     
     [rows,cols] = size(inFT);
     if( iseven(rows) )
-        rowSeq = [0:rows/2-1, -rows/2:-1]; %need to add support for odd
+        rowSeq = [0:rows/2-1, -rows/2:-1]; 
     else
         rowSeq = [0:rows/2, -rows/2:-1];
     end
@@ -21,7 +21,7 @@ function out = holoShiftAndCrop(in, relOffset,newSize)
     [colGrid,rowGrid] = meshgrid(colSeq,rowSeq);
  
     % %shift done using DFT "shift theorem" to allow subpixel shift
-    expon = - 2*pi*(relOffset(1).*rowGrid./rows + relOffset(2).*colGrid./cols);
+    expon = -2*pi*(relOffset(1).*rowGrid./rows + relOffset(2).*colGrid./cols);
     inFT = inFT .* exp( 1i .* expon );
     
     out = ifft2(inFT);

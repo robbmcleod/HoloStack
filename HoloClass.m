@@ -63,7 +63,8 @@ classdef HoloClass < handle
         pShift  %phase shift
                 
         xc %cross-correlation image (not presently in use)
-        xcEdge = [64 64]; % Default hp.xcWindow and pmWindow values
+        xcEdge = [16 16]; % Default hp.xcWindow and pmWindow values
+        xcCoeff % The maximum value of the cross-correlation coefficient ( = 1 is good)
         
         dose; % The mean dose, from the actual hologram
         visibility; % The mean visibility within the hologram region, determined by histogram method
@@ -96,17 +97,12 @@ classdef HoloClass < handle
             end
         end
         
-        % Pass in a pre-processed hologram from somewhere else (typically used for simulation)  
-        function build( this, holo_in )
-            this.holo = holo_in;
-        end
-        
         %Reconstruct hologram
-        function reconstruct( this )
+        function reconstruct( this  )
             if( ~isempty(this.filename) ) % Experiment
                 FFTReconMulti( this, this.hp );
             else % Simulation
-                disp( 'FIX ME: HoloClass.reconstruct cannot handle simulated data' );
+                FFTReconMulti( this, this.hp );
             end
         end
         
@@ -189,7 +185,7 @@ classdef HoloClass < handle
         end
         
         % Align the hologram in image-space
-        function [] = calcOffset( this, base, alignMethodName, alignMethodField, refImage )
+        function [] = calcOffset_masked( this, base, alignMethodName, alignMethodField, refImage )
             
             if( ~exist( 'alignMethodField' ) )
                 fieldName = 'centerband';
@@ -220,45 +216,65 @@ classdef HoloClass < handle
             % Find mask.  If the HoloReconP doesn't have one, make one from
             % the xcWindow or if thats empty, make a default one from
             % xcEdge
-            disp( 'TO DO: NOW!!!!!!!!!!' )
-            disp( 'TO DO: NOW!!!!!!!!!!' )
-            disp( 'TO DO: NOW!!!!!!!!!!' )
-            disp( 'TO DO: NOW!!!!!!!!!!' )
+            if( isempty( this.hp.xcMask )  )
+                [xmesh, ymesh] = meshgrid( 1:this.hp.reconSize(1), 1:this.hp.reconSize(2) );
+                
+                if( isempty( this.hp.xcWindow ) )
+                    disp( 'HoloClass:calcOffset: Making default correlation window' );
+                    
+                    this.hp.xcMask = (xmesh > this.xcEdge(1)) .* ...
+                        (xmesh < this.hp.reconSize(1) - this.xcEdge(1) +1 ) .* ...
+                        (ymesh > this.xcEdge(2)) .* ...
+                        (ymesh < this.hp.reconSize(2) - this.xcEdge(2) +1 );
+                else % have a xcWindow to work with
+                    disp( 'HoloClass:calcOffset: Making rectangular correlation window' );
+                    this.hp.xcMask = (xmesh > this.hp.xcWindow(1)) .* ...
+                        (xmesh < this.hp.xcWindow(3) ) .* ...
+                        (ymesh > this.hp.xcWindow(2)) .* ...
+                        (ymesh < this.hp.xcWindow(4) );
+                end
+                
+                % figure; imagesc( this.hp.xcMask ); axis image; title( 'Rectangular generated mask' );
+            end 
+            
+            % Make a copy so we can edit it
+            xcmask = this.hp.xcMask;
+            
+            % figure; imagesc( xcmask_rs .* base2 ); axis image;  title( [ 'Masked ROI #', num2str(this.number)] );
             
             % Crop to limits of mask and upsample
-
-            % Apply xcWindow
-            % If no xcWindow given, use default xcEdge instead
-            if( isempty( this.hp.xcWindow ) )
-                % I modified this so it actually sets the hp.xcWindow to
-                % xcEdge
-                disp( 'HoloClass.calcOffset: No xcWindow provided, using default xcEdge' )
-                this.hp.xcWindow = [ this.xcEdge+1, this.hp.holoSize - this.xcEdge ];
-                disp( ['this.xcWindow: ', num2str( this.hp.xcWindow )].' )
-            end
-            
-            xcRescale_x = this.hp.holoSize(1)./this.hp.reconSize(1);
-            xcRescale_y = this.hp.holoSize(2)./this.hp.reconSize(2);
-            reconXCWindow = [ ceil(this.hp.xcWindow(1)./xcRescale_x), ceil(this.hp.xcWindow(2)./xcRescale_y), ...
-                floor(this.hp.xcWindow(3)./xcRescale_x), floor(this.hp.xcWindow(4)./xcRescale_y) ];
-
+            xcml = findMaskLimits( xcmask );
+            xcmask = xcmask( xcml(1):xcml(3), xcml(2):xcml(4) );
             % Cut images down to the cross-correlation window
-            tmplt = tmplt( reconXCWindow(2):reconXCWindow(4), reconXCWindow(1):reconXCWindow(3) );
-            base2 = base2( reconXCWindow(2):reconXCWindow(4), reconXCWindow(1):reconXCWindow(3) );
+            tmplt = tmplt( xcml(1):xcml(3), xcml(2):xcml(4) );
+            base2 = base2( xcml(1):xcml(3), xcml(2):xcml(4) );
             
             % Bicubic image resampling
-            rs_tmplt = abs(imresize(tmplt,this.hp.xcOversample));
-            rs_base2 = abs(imresize(base2,this.hp.xcOversample));
+            up_tmplt = abs(imresize( tmplt, this.hp.xcOversample ));
+            up_base2 = abs(imresize( base2, this.hp.xcOversample ));
+            up_mask = abs(imresize( xcmask, this.hp.xcOversample, 'bilinear' )); 
+            % We want the mask to remain binary
+            up_mask = up_mask > 0.5;
+            
+            % figure; imagesc( up_mask .* up_base2 ); axis image;  title( [ 'Masked ROI #', num2str(this.number)] );
             
             % Limit the range of the oversampling to the general radii of
             % the original images.
-            xcAmp = normxcorr2_general( rs_tmplt, rs_base2, size(rs_base2,1).*size(rs_base2,2)./4 );  
-
-            xcSize = size( xcAmp );
-            [~, xc_maxpos] = max2( xcAmp );
+            % TO DO: currently using Padfield's default overlap ratio,
+            % increase it as needed.
+            % Oops I was x-correlating to the tmplt and not the base...
+            [xcTrans, this.xcCoeff ] = MaskedTranslationRegistration( up_base2, up_tmplt, up_mask, up_mask );
             
-            this.offset = -((xcSize+1)./2 - xc_maxpos)./this.hp.xcOversample;
-            %disp( [ 'normxcorr2_general results = ', num2str( this.offset ) ] )
+            % xcAmp = normxcorr2_general( up_tmplt, up_base2, size(up_base2,1).*size(up_base2,2)./4 );  
+            % xcSize = size( xcAmp );
+            % [~, xc_maxpos] = max2( xcAmp );
+            
+            % TO DO: xcTrans is flipped compared to what I get out of the
+            % general method.  Find out why.
+            xcTrans = -[xcTrans(2) xcTrans(1)];
+            
+            this.offset = xcTrans./this.hp.xcOversample;
+            % disp( [ 'normxcorr2_masked results = ', num2str( this.offset ) ] )
         end
         
         % This is the old depricated version using normxcorr2_general
@@ -296,18 +312,17 @@ classdef HoloClass < handle
                 % I modified this so it actually sets the hp.xcWindow to
                 % xcEdge
                 disp( 'HoloClass.calcOffset: No xcWindow provided, using default xcEdge' )
-                this.hp.xcWindow = [ this.xcEdge+1, this.hp.holoSize - this.xcEdge ];
-                disp( ['this.xcWindow: ', num2str( this.hp.xcWindow )].' )
+                this.hp.xcWindow = [ this.xcEdge, this.hp.reconSize - this.xcEdge + 1 ];
+                % disp( ['this.xcWindow: ', num2str( this.hp.xcWindow )].' )
             end
             
-            xcRescale_x = this.hp.holoSize(1)./this.hp.reconSize(1);
-            xcRescale_y = this.hp.holoSize(2)./this.hp.reconSize(2);
-            reconXCWindow = [ ceil(this.hp.xcWindow(1)./xcRescale_x), ceil(this.hp.xcWindow(2)./xcRescale_y), ...
-                floor(this.hp.xcWindow(3)./xcRescale_x), floor(this.hp.xcWindow(4)./xcRescale_y) ];
+            reconXCWindow = this.hp.xcWindow;
 
             % Cut images down to the cross-correlation window
             tmplt = tmplt( reconXCWindow(2):reconXCWindow(4), reconXCWindow(1):reconXCWindow(3) );
             base2 = base2( reconXCWindow(2):reconXCWindow(4), reconXCWindow(1):reconXCWindow(3) );
+            
+            % figure; imagesc( base2 ); axis image;
             
             % Bicubic image resampling
             rs_tmplt = abs(imresize(tmplt,this.hp.xcOversample));
@@ -315,12 +330,12 @@ classdef HoloClass < handle
             
             % Limit the range of the oversampling to the general radii of
             % the original images.
-            xcAmp = normxcorr2_general( rs_tmplt, rs_base2, size(rs_base2,1).*size(rs_base2,2)./4 );  
+            xcAmp = normxcorr2_general( rs_base2, rs_tmplt, size(rs_base2,1).*size(rs_base2,2)./4 );  
 
             xcSize = size( xcAmp );
-            [~, xc_maxpos] = max2( xcAmp );
+            [this.xcCoeff, xc_maxpos] = max2( xcAmp );
             
-            this.offset = -((xcSize+1)./2 - xc_maxpos)./this.hp.xcOversample;
+            this.offset = ((xcSize+1)./2 - xc_maxpos)./this.hp.xcOversample;
             %disp( [ 'normxcorr2_general results = ', num2str( this.offset ) ] )
         end
         
@@ -421,21 +436,19 @@ classdef HoloClass < handle
             base = base.(fieldName);
             tmplt = this.(fieldName);
             
-            if( strcmp( fieldName, 'regside' ) )
-                if( isempty( this.hp.pmWindow ) )
+            if( isempty( this.hp.pmWindow ) )
+                if( isempty( this.hp.xcWindow ) )
                     disp( 'HoloClass.shiftPhase: No hp.pmWindow provided, using default xcEdge' )
                     this.hp.pmWindow = [ this.xcEdge+1, this.hp.holoSize - this.xcEdge ];
+                else
+                    disp( 'HoloClass.shiftPhase: Using hp.xcWindow for hp.pmWindow' );
+                    this.hp.pmWindow = this.hp.xcWindow;
                 end
-                % Apply hp.hp.xcWindow
-                pmWindowTemp = this.hp.pmWindow;
-                % Generally we're operating on reg, but the hp.xcWindow should be
-                % shrunk appropriately to deal with the difference in size
-                % between this.sideband and this.reg
-                xcRescale_x = this.hp.holoSize(1)./this.hp.reconSize(1);
-                xcRescale_y = this.hp.holoSize(2)./this.hp.reconSize(2);
-                % First rescale
-                reconpmWindow = [ ceil(pmWindowTemp(1)./xcRescale_x), ceil(pmWindowTemp(2)./xcRescale_y), ...
-                floor(pmWindowTemp(3)./xcRescale_x), floor(pmWindowTemp(4)./xcRescale_y) ];
+            end
+                
+            if( strcmp( fieldName, 'regside' ) )
+                % Apply hp.pmWindow
+                reconpmWindow = this.hp.pmWindow;
 
                 % Then remove the offset shift
                 if( reconpmWindow(1) <= 0 )
@@ -456,25 +469,14 @@ classdef HoloClass < handle
                 end
 
             elseif( strcmp(fieldName, 'side') )
-                
-                 if( isempty( this.hp.pmWindow ) )
-                    disp( 'HoloClass.shiftPhase: No hp.pmWindow provided, using default xcEdge' )
-                    this.hp.pmWindow = [ this.xcEdge+1, this.hp.holoSize - this.xcEdge ];
-                end
-                % Apply hp.xcWindow
-                pmWindowTemp = this.hp.pmWindow;
-                % Generally we're operating on reg, but the hp.xcWindow should be
-                % shrunk appropriately to deal with the difference in size
-                % between this.sideband and this.reg
-                xcRescale_x = this.hp.holoSize(1)./this.hp.reconSize(1);
-                xcRescale_y = this.hp.holoSize(2)./this.hp.reconSize(2);
-                % First rescale
-                reconpmWindow = [ ceil(pmWindowTemp(1)./xcRescale_x), ceil(pmWindowTemp(2)./xcRescale_y), ...
-                floor(pmWindowTemp(3)./xcRescale_x), floor(pmWindowTemp(4)./xcRescale_y) ];
+                % No checks needed
+                reconpmWindow = this.hp.pmWindow;
             end
             
             tmplt = tmplt( reconpmWindow(2):reconpmWindow(4), reconpmWindow(1):reconpmWindow(3) );
             base = base( reconpmWindow(2):reconpmWindow(4), reconpmWindow(1):reconpmWindow(3) );
+            
+            % figure; imagesc( angle(tmplt) ); axis image; title( 'Cropped phase matching window' );
             
             % Trick from DFTregistration
             fftXC = fft2(base) .* conj(fft2(tmplt));

@@ -90,21 +90,56 @@ end
 methods
 
     %constructor function. Requires 0-3 parameters
-    function this = HoloStack( holoname, hp )
+    function this = HoloStack( holofilename, hp )
         %If at least 1 parameter, define HoloStack object's name
         if( nargin < 1 )
-            this.name = 'GenericHoloStack';
+            error( 'HoloStack.HoloStack: Must pass in name for parsing' );
         else
-            this.name = holoname;
+            this.name = holofilename;
         end
         
         if( nargin < 2 )
-            disp( 'Holostack WARNING: No recon parameters passed in, using defaults' )
+            disp( 'Holostack.HoloStack: WARNING, no recon parameters passed in, using defaults' )
             this.hp = HoloReconP();
         else
             this.hp = hp;
         end
+        
+        % Start reading in the files in the directory in order until you
+        % run out
+        disp( 'TO DO: add support for DM3 and HDF5 stacks as well as individual files' );
+        i = 1;
+        sentinel = true;
+        while( sentinel )
+            filename1 = dir( [holofilename,num2str(i),'.dm3'] );
+            if( isempty(filename1) )
+                sentinel = false;
+            else
+                this.holofiles{i} = filename1.name;
+                i = i + 1;
+            end
+        end
+        
+        if( isempty( this.holofiles ) )
+            disp( 'HoloStack.HoloStack: No files found, ready for simulation data or you mistyped it' )
+        else
+            this.numFrames = length(this.holofiles);
 
+            this.makeOrdering();
+
+            newHolos(this.numFrames) = HoloClass(); %better way to initialize, ie array of objects??
+            this.holos = newHolos;
+            clear newHolos
+            % Hologram code
+            for j = this.ordering   
+                curr = this.holos(j);
+
+                %initialize holoclass values
+                curr.number = j;
+                curr.filename = this.holofiles{j};
+                curr.hp = this.hp;
+            end %for
+        end
     end
     
     %make a copy of a HoloStack object.
@@ -195,46 +230,44 @@ methods
             curr.number = j;
             curr.hp = this.hp;
             
-            %read a holo
-            curr.build( holo_sim(:,:,j) );
+            % write a holo
+            curr.holo = holo_sim(:,:,j);
             
             %reconstruct 
             fprintf('Recon holo: %d\n',j);
             curr.reconstruct();        
         end
     end
+    
+    % Pass in another holostack, that of the object, if this is to be used
+    % as a reference set
+    function setAsReference( this, hs_obj )
+        this.minOffset = hs_obj.minOffset;
+        this.maxOffset = hs_obj.maxOffset;
+        this.regSize = hs_obj.regSize;
+        this.register( 'Offset' );
+    end
 
     %reads data in and reconstructs the sideband images
-    function [sb_pos_return] = readAndRecon(this, fieldName, filename )
-        % Read in and reconstruct hologram
-        % example input values:
-        %  name : 'Anything you want'
-        %  directory : 'holodata/' 
-        %  objnames : 'HoloAObj*'
-
-        % Start reading in the files in the directory in order until you
-        % run out
-        i = 1;
-        sentinel = true;
-        while( sentinel )
-            filename1 = dir( [filename,num2str(i),'.dm3'] );
-            if( isempty(filename1) )
-                sentinel = false;
-            else
-                if( strcmp( fieldName, 'holos' ) )
-                    this.holofiles{i} = filename1.name;
-                else
-                    error( ['Unknown fieldName passed in: ', num2str( fieldName ) ] )
-                end
-                i = i + 1;
-            end
-        end
-            if( strcmp( fieldName, 'holos' ) )
-                this.numFrames = length(this.holofiles);
-            else
+    function readAndRecon(this, fieldName )
+        if( nargin < 2 );
+            fieldName = 'holos';
         end
         
-        %chose which image to use as the base image based on the value of
+        if( strcmp( fieldName, 'holos' ) == 1 )
+            this.makeOrdering();
+            
+            for j = this.ordering
+                fprintf('Recon: %d\n',j);
+                this.holos(j).reconstruct();
+            end
+        else
+            disp( 'HoloStack.readAndRecon: Unkown fieldName passed in' )
+        end
+    end
+    
+    function makeOrdering( this )
+                    %chose which image to use as the base image based on the value of
         %baseChoice
         switch lower(this.hp.baseChoice)
             case 'first'
@@ -247,32 +280,8 @@ methods
                 this.baseIdx = 1;
         end
         
-        %define HoloStack ordering based on this.baseIdx
-        if( strcmp( fieldName, 'holos' ) )
-            this.ordering = [this.baseIdx:this.numFrames,this.baseIdx-1:-1:1];
+        this.ordering = [this.baseIdx:this.numFrames,this.baseIdx-1:-1:1];
 
-            newHolos(this.numFrames) = HoloClass(); %better way to initialize, ie array of objects??
-            this.holos = newHolos;
-            clear newHolos
-        else
-            % Shouldn't be able to get here due to check above
-        end
-
-        % Hologram code
-        if( strcmp( fieldName, 'holos' ) )
-            for j = this.ordering   
-                curr = this.holos(j);
-
-                %initialize holoclass values
-                curr.number = j;
-                curr.filename = this.holofiles{j};
-                curr.hp = this.hp;
-                
-                %reconstruct 
-                fprintf('Recon: %d\n',j);
-                curr.reconstruct();
-            end %for
-        end %if
 
     end
     
@@ -370,9 +379,18 @@ methods
                     % RM: Autocorrelate the base to itself, only really
                     % required for the x-correlation movie.
                     if( ~isempty( xcorrRef ) )
-                        curr.calcOffset(curr,alignMethodName, alignMethodField, this.xcorrReference );
+
+                        if( strcmp( this.hp.xcMethod, 'general') == 1 )
+                            curr.calcOffset_general(curr,alignMethodName, alignMethodField, this.xcorrReference );
+                        else % masked
+                            curr.calcOffset_masked(curr,alignMethodName, alignMethodField, this.xcorrReference );
+                        end
                     else 
-                        curr.calcOffset(curr,alignMethodName, alignMethodField );
+                        if( strcmp( this.hp.xcMethod, 'general') == 1 )
+                            curr.calcOffset_general(curr,alignMethodName, alignMethodField );
+                        else % masked
+                            curr.calcOffset_masked(curr,alignMethodName, alignMethodField );
+                        end
                     end
                     curr.offset = [0 0];
                     base = curr;
@@ -392,13 +410,22 @@ methods
                     
                     if( ~isempty( xcorrRef ) )
                         % First xc is just an autocorrelation
-                        curr.calcOffset(base,alignMethodName, alignMethodField, this.xcorrReference );
+                        
+                        if( strcmp( this.hp.xcMethod, 'general') == 1 )
+                            curr.calcOffset_general(base,alignMethodName, alignMethodField, this.xcorrReference );
+                        else % masked
+                            curr.calcOffset_masked(base,alignMethodName, alignMethodField, this.xcorrReference );
+                        end
                     else 
-                        curr.calcOffset(base,alignMethodName, alignMethodField ); % This prevOffset might reinforce previous errors...
+                        if( strcmp( this.hp.xcMethod, 'general') == 1 )
+                            curr.calcOffset_general(base,alignMethodName, alignMethodField );
+                        else % masked
+                            curr.calcOffset_masked(base,alignMethodName, alignMethodField );
+                        end
                     end
                     
                 end
-                disp( [ 'CalcOffset (', num2str(j), '): ' ,  num2str( curr.offset(1) ,'%.2f'), ', ', num2str( curr.offset(2),'%.2f'), ' pix' ] )
+                disp( [ 'CalcOffset_', this.hp.xcMethod, ' (', num2str(j), '): ' ,  num2str( curr.offset(1) ,'%.2f'), ', ', num2str( curr.offset(2),'%.2f'), ' pix' ] )
                 % prevOffset = curr.offset; % DEBUG: prevOffset has been disabled above.
             end
 
@@ -551,21 +578,84 @@ methods
     
     % Draw a rectangle to limit xcorrelation to.
     function drawxcMaskRect( this )
+        % Grab centerband
+        workcenter = this.holos(this.ordering(1)).center;
         
+        if( isempty( workcenter ) )
+            % Ask this.holos(this.ordering(1)) to reconstruct itself
+            this.holos( this.ordering(1) ).reconstruct();
+            workcenter = this.holos(this.ordering(1)).center;
+        end
+        
+        fig = figure( 'units', 'normalized', 'outerposition', [0 0 1 1] );
+        imagesc( workcenter, histClim( workcenter,3) );
+        axis image;
+        title( ['Rectangle to define xcorrelation region \newline Click and drag \newline Double click on rect to finish'] );
+        h = imrect();
+        position = wait(h); % This is just to make MATLAB wait on the poly to return
+        
+        % Position is [xmin ymin width height]
+        this.hp.xcWindow = round( [position(1), position(2), position(1)+position(3), position(2)+position(4)] );
+        
+        close( fig );
+        pause(0.05);
     end
     
     % Draw a rectangle to limit phase matching to.  At present this cannot
     % be done free-hand because of the methodology used to calculate the
     % phase-match error without phase-wrapping problems.
     function drawpmMaskRect( this )
+        % Grab sideband
+        workside = angle( this.holos(this.ordering(1)).side );
         
+        if( isempty( workside ) )
+            % Ask this.holos(this.ordering(1)) to reconstruct itself
+            this.holos( this.ordering(1) ).reconstruct();
+            workside = angle( this.holos(this.ordering(1)).side );
+        end
+        
+        fig = figure( 'units', 'normalized', 'outerposition', [0 0 1 1] );
+        imagesc( workside, histClim( workside,3) );
+        axis image;
+        title( ['Rectangle to define phase-matching region \newline Click and drag \newline Double click on rect to finish'] );
+        h = imrect();
+        position = wait(h); % This is just to make MATLAB wait on the poly to return
+
+        % Position is [xmin ymin width height]
+        this.hp.pmWindow = round( [position(1), position(2), position(1)+position(3), position(2)+position(4)] );
+        
+        close( fig );
+        pause(0.05);
     end
     
     
     % Draw a mask over the centerband reconstruction to define the
-    % x-correlation region.  Generally call in-between
+    % x-correlation region.  Will reconstruct the centerband of the first
+    % hologram in the ordering if it hasn't already been done.
     function drawxcMaskFreehand( this )
-        % 
+        % Grab centerband
+        workcenter = this.holos(this.ordering(1)).center;
+        
+        if( isempty( workcenter ) )
+            % Ask this.holos(this.ordering(1)) to reconstruct itself
+            this.holos( this.ordering(1) ).reconstruct();
+            workcenter = this.holos(this.ordering(1)).center;
+        end
+        
+        fig = figure( 'units', 'normalized', 'outerposition', [0 0 1 1] );
+        imagesc( workcenter, histClim( workcenter,3) );
+        axis image;
+        title( ['Vertices to define xcorrelation region \newline Right-click to stop \newline Double click on poly to finish'] );
+        h = impoly();
+        position = wait(h); % This is just to make MATLAB wait on the poly to return
+        
+        this.hp.xcMask = h.createMask();
+        close( fig );
+        pause(0.05);
+%         figure;
+%         imagesc( h.createMask() );
+%         axis image;
+%         title( 'Mask' );
     end
     
     %calcluate the average of the data contained in a HoloClass field
@@ -912,8 +1002,6 @@ methods
     % Can be passed a reference HoloStack
     function [] = plotAll( this, sigma, refholostack, useFringeMask )
         
-        this.calcPSRecon();
-        
         % ps = pixel size in nm
         if nargin < 2
             sigma = 2.5; % Don't produce any scale bars
@@ -1030,7 +1118,9 @@ methods
 
         offsets = this.getOffsets();
         offsets = offsets .* (this.hp.holoSize(1) ./ this.hp.reconSize(1) );
-        offsets = offsets.*this.hp.ps_recon;
+        if( ~isempty( this.hp.ps_recon ) )
+            offsets = offsets.*this.hp.ps_recon;
+        end
 
         fig = figure; movegui;
         set(fig,'DefaultAxesFontName','Times')
@@ -1039,8 +1129,14 @@ methods
         plot( offsets(:,1), offsets(:,2), 'ro-', 'LineWidth', 2, 'MarkerSize', 10 );
         title( ['Estimated drift: ', this.name] )
         legend( 'Estimated Drift' )
-        xlabel( 'x_{drift} (nm)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
-        ylabel( 'y_{drift} (nm)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
+        if( ~isempty( this.hp.ps_recon ) )
+        	xlabel( 'x_{drift} (nm)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
+            ylabel( 'y_{drift} (nm)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
+        else
+            xlabel( 'x_{drift} (pix)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
+            ylabel( 'y_{drift} (pix)', 'FontSize', 16.0, 'FontWeight', 'Demi' );
+        end
+
 
         pshifts = this.getPhaseShifts();
         fig = figure; movegui;

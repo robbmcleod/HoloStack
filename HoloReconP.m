@@ -104,9 +104,8 @@ properties
     xcWindow % FOUR ELEMENT array indicating [x1 y1 x2 y2] bounds to x-correlate too, interpolated from original hologram size to reconSize
     pmWindow % Similar to xcWindow, but used for the phase matching part
     xcOversample = 4.0; % Degree of oversampling to perform x-correlation (i.e. precise to 1./XCoversample pixels)
-    xcorrmode = 'general' % Options: 'general', 'masked'
-    xcorrmask % For use with, a binary mask the same size as the hologram.
-
+    xcMethod = 'masked' % Options: 'general', 'masked'
+    xcMask % For use with, a binary mask the same size as the hologram.
 end
 
 methods
